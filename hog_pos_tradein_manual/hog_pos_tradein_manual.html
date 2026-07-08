@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>POS Trade-In Product Creation - User Manual</title>
+    <link rel="stylesheet" href="assets/manual.css">
+    <script src="assets/captions.js" defer></script>
+</head>
+<body>
+    <div class="manual">
+        <aside class="sidebar">
+            <img class="logo" src="assets/logo/RIT_Logo_White.png" alt="Retail IT Group logo">
+            <h1>POS Trade-In Product Creation</h1>
+            <p>User manual for capturing trade-in items at POS and automating their purchase, receipt and billing.</p>
+            <nav class="toc" aria-label="Table of contents">
+                <a href="#introduction">1. Introduction</a>
+                <a href="#configuration">2. Configuration</a>
+                <a href="#how-it-works">3. How It Works</a>
+                <a href="#main-flow">4. Capturing a Trade-In at POS</a>
+                <a href="#edge-cases">5. Failed Captures &amp; Idempotency</a>
+                <a href="#selling-price">6. Setting the Selling Price</a>
+                <a href="#po-batch">7. Purchase Batch Automation</a>
+                <a href="#states">8. Batch States and Reasons</a>
+                <a href="#best-practices">9. Best Practices</a>
+            </nav>
+        </aside>
+
+        <main class="content">
+            <header class="hero">
+                <h2>POS Trade-In Product Creation User Manual</h2>
+                <p>
+                    When a cashier scans or clicks the "Trade In" product in the Point of
+                    Sale, this module opens a capture form, creates a new Preloved-category product for each item
+                    entered, and keeps a full audit trail. A separate daily automation then bundles each store's
+                    trade-ins into a Purchase Order, Receipt and Vendor Bill without manual intervention.
+                </p>
+                <div class="meta">
+                    <span class="pill">POS capture</span>
+                    <span class="pill">Auto product creation</span>
+                    <span class="pill">Automated purchasing</span>
+                    <span class="pill">Audit trail</span>
+                </div>
+            </header>
+
+            <section id="introduction">
+                <h2>1. Introduction</h2>
+                <p class="lead">
+                    Trade-ins are captured at the point of sale, not on the product form. Each captured item becomes
+                    a new sellable "Preloved Goods" product, linked back to an audit record that stores exactly what
+                    the cashier entered.
+                </p>
+                <div class="grid">
+                    <div class="card">
+                        <h3>Main purpose</h3>
+                        <p>Force full capture of trade-in item details at POS and automatically create the resulting sellable product, with no raw trade-in data ever added to the product record itself.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Operational flow</h3>
+                        <p>Cashier captures item details at POS → product + audit record created automatically → staff member sets the selling price → daily automation purchases, receives and bills the item per store.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="configuration">
+                <h2>2. Configuration</h2>
+                <p>
+                    Two areas need setup before this module is fully operational: the notification recipient, and the per-store mapping used by the purchase automation.
+                </p>
+                <div class="shot">
+                    <img src="assets/screenshots/01_settings_notification.png" alt="General Settings > Integrations showing the Trade-In Batch Notification User field">
+                </div>
+                <p class="caption"></p>
+
+                <div class="shot">
+                    <img src="assets/screenshots/01b_store_mappings.png" alt="Trade-In Store Configuration list showing per-store warehouse, analytic account and vendor mapping">
+                </div>
+                <p class="caption"></p>
+
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Purpose</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>Trade-In Batch Notification User</code></td>
+                            <td>Set under <code>Settings &gt; General Settings &gt; Integrations</code>, alongside the other integration toggles. Receives a daily summary email after the Trade-In Purchase Batch runs, listing which stores succeeded and which failed.</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="note">
+                    Also required, under <code>Inventory &gt; Trade Ins &gt; Configuration &gt; Store Mappings</code>: one row per store, mapping the POS store to its Receiving Warehouse, Analytic Account, Vendor and Reference Code. Picking a store auto-suggests the warehouse, analytic account and reference code from that store's existing POS configuration — these are editable before saving.
+                </div>
+                <div class="example">
+                    <h3>Example configuration</h3>
+                    <p>
+                        Store "House of Golf Port Elizabeth" → Reference Code auto-suggested as <code>PORTELIZABETH</code>,
+                        used to build daily PO/Bill references such as <code>SEC030726PORTELIZABETH</code> (SEC + date + code).
+                    </p>
+                </div>
+                <div class="note warning">
+                    Every store with trade-ins must have an active Store Mapping row before the daily batch can run for it. A store without one is never silently skipped — it produces a visible <code>No Store Config</code> batch instead (see Section 8).
+                </div>
+            </section>
+
+            <section id="how-it-works">
+                <h2>3. How It Works</h2>
+                <p>
+                    Clicking or scanning the fixed "Trade In" trigger product opens a capture popup immediately, before the line is added to the order. Nothing about a trade-in is stored on the product itself — all raw data lives on a separate audit record.
+                </p>
+                <table>
+                    <thead>
+                        <tr><th>Captured field</th><th>Required?</th><th>Notes</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Brand</td><td>Yes</td><td>&nbsp;</td></tr>
+                        <tr><td>Model</td><td>Yes</td><td>&nbsp;</td></tr>
+                        <tr><td>Item Type</td><td>Yes</td><td>E.g. Golf Clubs, Golf Bag.</td></tr>
+                        <tr><td>Club</td><td>No</td><td>E.g. Driver, Fairway, Irons, Wedge, Putter.</td></tr>
+                        <tr><td>Hand Side</td><td>No</td><td>Left / Right / N/A.</td></tr>
+                        <tr><td>Additional / Relevant Info</td><td>No</td><td>Free text.</td></tr>
+                        <tr><td>Trade In Price</td><td>Yes</td><td>Must be numeric and not negative.</td></tr>
+                        <tr><td>Condition</td><td>Yes</td><td>New / Good / Well Used.</td></tr>
+                    </tbody>
+                </table>
+                <div class="example">
+                    <h3>Product name format</h3>
+                    <p>
+                        <code>Preloved {Brand} {Item Type} | {Club} | {Model} {Additional Info}</code> — optional
+                        segments (Club, Additional Info) are dropped cleanly rather than leaving blank separators.
+                        Example: <code>Preloved Callaway Golf Clubs | Driver | Rogue ST Max</code>.
+                    </p>
+                </div>
+                <div class="example">
+                    <h3>Pricing at creation</h3>
+                    <p>
+                        The product's Cost is set to Trade In Price ÷ 1.15 (removing VAT). Selling Price is deliberately
+                        left at 0 — it is not decided at POS (see Section 6). Internal reference and barcode are
+                        generated automatically using the existing SKU/barcode generator logic already in use elsewhere.
+                    </p>
+                </div>
+            </section>
+
+            <section id="main-flow">
+                <h2>4. Capturing a Trade-In at POS</h2>
+                <p>The cashier's flow requires no backend access at all:</p>
+                <div class="shot">
+                    <img src="assets/screenshots/02_capture_popup.png" alt="POS trade-in capture popup with brand, model, item type and condition fields">
+                </div>
+                <p class="caption"></p>
+                    <li>Cashier scans or clicks the "Trade In" product in the POS.</li>
+                    <li>The capture popup opens immediately, before anything is added to the order.</li>
+                    <li>Cashier enters Brand, Model, Item Type, Condition and Trade In Price (Club, Hand Side and Additional Info as applicable).</li>
+                    <li>On confirmation, a Trade-In order line is added at quantity -1, priced at the sum of the entered Trade In Prices.</li>
+                    <li>The new Preloved product and its audit record are created automatically once the batch reaches the backend.</li>
+                </ol>
+                <div class="note">
+                    The popup will not reopen if a Trade-In line already exists on the current order, preventing accidental double capture.
+                </div>
+            </section>
+
+            <section id="edge-cases">
+                <h2>5. Failed Captures &amp; Idempotency</h2>
+                <p>
+                    Every trade-in submission carries a batch ID (the POS order UUID) and a per-line key. Resubmitting
+                    the same batch — for example after a network retry — can never create duplicate products or audit
+                    records; the second attempt simply returns the records already created the first time.
+                </p>
+                <div class="note warning">
+                    If payment has already succeeded but product creation fails after retries, the raw captured data
+                    is preserved in a <strong>Failed Captures</strong> log rather than being lost, for manual follow-up.
+                </div>
+            </section>
+
+            <section id="selling-price">
+                <h2>6. Setting the Selling Price</h2>
+                <p>
+                    Selling Price is intentionally not captured at POS. An authorized staff member (Trade-In: Can Edit
+                    Product Title / Selling Price security group) sets it afterwards, either directly on the Trade-In
+                    record or on the product — both are kept in sync. Product Title is similarly editable after
+                    creation; no other captured field can be changed once a trade-in is saved.
+                </p>
+            </section>
+
+            <section id="po-batch">
+                <h2>7. Purchase Batch Automation</h2>
+                <p>
+                    A daily (or on-demand) job sweeps up every currently un-batched trade-in per store and, for that
+                    store, creates a Purchase Order against the fixed trade-in vendor, confirms it, validates the
+                    receipt, and creates and posts the vendor bill — entirely automatically.
+                </p>
+                <div class="shot">
+                    <img src="assets/screenshots/03_po_batch_list.png" alt="Trade-In Purchase Batch list view showing per-store batch runs and states">
+                </div>
+                <p class="caption"></p>
+                <div class="example">
+                    <h3>All-or-nothing per store, per run</h3>
+                    <p>
+                        The full PO → Receipt → Bill chain for one store runs inside a single database savepoint. If
+                        any step fails, everything for that store rolls back cleanly and the batch is marked
+                        <code>Failed</code> with the error recorded — nothing partially-created is left behind.
+                    </p>
+                </div>
+                <div class="note">
+                    A failed or no-config batch can be retried manually (<code>Retry</code> action) — this simply
+                    triggers a fresh run for that store, which naturally sweeps up the original items plus anything
+                    captured since.
+                </div>
+            </section>
+
+            <section id="states">
+                <h2>8. Batch States and Reasons</h2>
+                <p>Each Purchase Batch record moves through the following states:</p>
+                <div class="status-list">
+                    <div class="status"><strong>Pending</strong><small>Batch created, processing not yet complete.</small></div>
+                    <div class="status"><strong>PO Created</strong><small>Purchase Order created and confirmed.</small></div>
+                    <div class="status"><strong>Received</strong><small>Stock receipt validated.</small></div>
+                    <div class="status"><strong>Billed</strong><small>Vendor bill created and posted.</small></div>
+                    <div class="status"><strong>Done</strong><small>Full chain completed successfully.</small></div>
+                    <div class="status"><strong>Failed</strong><small>A step in the chain failed; everything for this store's run was rolled back.</small></div>
+                    <div class="status"><strong>No Store Config</strong><small>Store has un-batched trade-ins but no active Store Mapping row.</small></div>
+                </div>
+                <div class="note">
+                    A successful notification email lists succeeded stores with their PO/Bill references; a failed
+                    run lists the failed stores with the recorded error message, sent to the configured notification user.
+                </div>
+            </section>
+
+            <section id="best-practices">
+                <h2>9. Best Practices</h2>
+                <ol class="steps">
+                    <li>Set up a Store Mapping row for every active POS store before trade-ins go live there.</li>
+                    <li>Set the Trade-In Batch Notification User so failures are actually seen daily.</li>
+                    <li>Set Selling Price promptly after creation — products are created at R0 selling price by design.</li>
+                    <li>Review Failed Captures regularly; these represent completed sales with no product created yet.</li>
+                    <li>Investigate and retry Failed / No Store Config batches rather than leaving them unresolved.</li>
+                    <li>Don't edit trade-in fields directly on the product beyond Title and Selling Price — other fields are locked by design.</li>
+                </ol>
+            </section>
+        </main>
+    </div>
+
+    <div class="lightbox-overlay" id="lightbox">
+        <button class="lightbox-close" aria-label="Close">&times;</button>
+        <img id="lightbox-img" src="" alt="">
+    </div>
+
+    <script>
+        (function () {
+            const overlay = document.getElementById('lightbox');
+            const overlayImg = document.getElementById('lightbox-img');
+            document.querySelectorAll('.shot img').forEach(function (img) {
+                img.addEventListener('click', function () {
+                    overlayImg.src = img.src;
+                    overlayImg.alt = img.alt;
+                    overlay.classList.add('open');
+                });
+            });
+            overlay.addEventListener('click', function () {
+                overlay.classList.remove('open');
+                overlayImg.src = '';
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape') {
+                    overlay.classList.remove('open');
+                    overlayImg.src = '';
+                }
+            });
+
+            // Auto-fill captions from assets/captions.js
+            if (typeof MANUAL_CAPTIONS !== 'undefined') {
+                document.querySelectorAll('.shot').forEach(function (shot) {
+                    const img = shot.querySelector('img');
+                    const captionEl = shot.nextElementSibling;
+                    if (!img || !captionEl || !captionEl.classList.contains('caption')) return;
+                    const filename = img.getAttribute('src').split('/').pop();
+                    const text = MANUAL_CAPTIONS[filename];
+                    captionEl.textContent = text || '';
+                    captionEl.style.display = text ? '' : 'none';
+                });
+            }
+        })();
+    </script>
+</body>
+</html>
